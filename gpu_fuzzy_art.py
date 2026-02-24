@@ -212,7 +212,9 @@ class GPUFuzzyART:
     # Core: fit
     # ------------------------------------------------------------------
 
-    def fit(self, X: np.ndarray, max_iter: int = 1) -> "GPUFuzzyART":
+    def fit(
+        self, X: np.ndarray, max_iter: int = 1, verbose: bool = False,
+    ) -> "GPUFuzzyART":
         """Fit the model to complement-coded data.
 
         Parameters
@@ -221,6 +223,8 @@ class GPUFuzzyART:
             Complement-coded data (output of prepare_data).
         max_iter : int
             Number of passes over the data.
+        verbose : bool
+            Show a tqdm progress bar.
 
         Returns
         -------
@@ -235,7 +239,11 @@ class GPUFuzzyART:
         self.labels_ = np.zeros(n_samples, dtype=int)
 
         for _epoch in range(max_iter):
-            for i in range(n_samples):
+            iterator = range(n_samples)
+            if verbose:
+                from tqdm.auto import tqdm
+                iterator = tqdm(iterator, desc="Clustering", total=n_samples)
+            for i in iterator:
                 self.labels_[i] = self._step_fit(X_t[i])
 
         return self
