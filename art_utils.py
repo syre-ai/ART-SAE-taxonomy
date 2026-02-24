@@ -7,6 +7,13 @@ and helpers for hierarchical clustering with SMART.
 import numpy as np
 from artlib import FuzzyART, GaussianART, HypersphereART, BayesianART, EllipsoidART, SMART
 
+try:
+    from gpu_fuzzy_art import GPUFuzzyART, GPUSMART
+
+    _GPU_AVAILABLE = True
+except ImportError:
+    _GPU_AVAILABLE = False
+
 
 # ---------------------------------------------------------------------------
 # ART Module Registry
@@ -49,6 +56,13 @@ ART_REGISTRY = {
         "complement_codes": False,
     },
 }
+
+if _GPU_AVAILABLE:
+    ART_REGISTRY["GPUFuzzyART"] = {
+        "class": GPUFuzzyART,
+        "default_params": {"rho": 0.7, "alpha": 0.01, "beta": 1.0},
+        "complement_codes": False,  # handled internally by prepare_data
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +142,10 @@ def create_smart_model(base_name, dim, rho_values, overrides=None):
 
     # Remove rho — SMART sets it per level
     base_params.pop("rho", None)
+
+    # GPUFuzzyART uses its own GPUSMART wrapper
+    if _GPU_AVAILABLE and base_name == "GPUFuzzyART":
+        return GPUSMART(rho_values=rho_values, **base_params)
 
     return SMART(entry["class"], rho_values, base_params)
 
