@@ -1,0 +1,11 @@
+artlib==0.1.7
+eai-sparsify
+transformers
+torch
+numpy
+scikit-learn
+umap-learn
+matplotlib
+plotly
+tqdm
+pandas
