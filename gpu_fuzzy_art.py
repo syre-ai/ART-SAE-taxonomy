@@ -213,7 +213,11 @@ class GPUFuzzyART:
     # ------------------------------------------------------------------
 
     def fit(
-        self, X: np.ndarray, max_iter: int = 1, verbose: bool = False,
+        self,
+        X: np.ndarray,
+        max_iter: int = 1,
+        verbose: bool = False,
+        verbose_desc: str = "Clustering",
     ) -> "GPUFuzzyART":
         """Fit the model to complement-coded data.
 
@@ -225,6 +229,8 @@ class GPUFuzzyART:
             Number of passes over the data.
         verbose : bool
             Show a tqdm progress bar.
+        verbose_desc : str
+            Description for the progress bar.
 
         Returns
         -------
@@ -242,7 +248,7 @@ class GPUFuzzyART:
             iterator = range(n_samples)
             if verbose:
                 from tqdm.auto import tqdm
-                iterator = tqdm(iterator, desc="Clustering", total=n_samples)
+                iterator = tqdm(iterator, desc=verbose_desc, total=n_samples)
             for i in iterator:
                 self.labels_[i] = self._step_fit(X_t[i])
 
@@ -404,6 +410,8 @@ class GPUFuzzyART:
         X: np.ndarray,
         parent_labels: np.ndarray,
         max_iter: int = 1,
+        verbose: bool = False,
+        verbose_desc: str = "Constrained fit",
     ) -> "GPUFuzzyART":
         """Fit with hierarchical constraint: each cluster may only contain
         samples from a single parent cluster.
@@ -416,6 +424,10 @@ class GPUFuzzyART:
             Cluster labels from the coarser (parent) level.
         max_iter : int
             Number of passes.
+        verbose : bool
+            Show a tqdm progress bar.
+        verbose_desc : str
+            Description for the progress bar.
 
         Returns
         -------
@@ -431,7 +443,11 @@ class GPUFuzzyART:
         self._cluster_parent: dict[int, int] = {}
 
         for _epoch in range(max_iter):
-            for i in range(n_samples):
+            iterator = range(n_samples)
+            if verbose:
+                from tqdm.auto import tqdm
+                iterator = tqdm(iterator, desc=verbose_desc, total=n_samples)
+            for i in iterator:
                 self.labels_[i] = self._step_fit_constrained(
                     X_t[i], int(parent_labels[i])
                 )
@@ -509,7 +525,7 @@ class GPUSMART:
             m.d_max_ = self.modules[0].d_max_.copy()
         return result
 
-    def fit(self, X: np.ndarray, max_iter: int = 1) -> "GPUSMART":
+    def fit(self, X: np.ndarray, max_iter: int = 1, verbose: bool = False) -> "GPUSMART":
         """Fit the hierarchical model.
 
         Level 0 is unconstrained. Each subsequent level is constrained so that
@@ -521,13 +537,18 @@ class GPUSMART:
             Complement-coded data (output of prepare_data).
         max_iter : int
             Number of passes per level.
+        verbose : bool
+            Show a tqdm progress bar per level.
 
         Returns
         -------
         self
         """
         # Level 0: unconstrained
-        self.modules[0].fit(X, max_iter=max_iter)
+        self.modules[0].fit(
+            X, max_iter=max_iter, verbose=verbose,
+            verbose_desc=f"Level 0 (rho={self.rho_values[0]})",
+        )
 
         # Levels 1+: constrained by previous level's labels
         for k in range(1, len(self.modules)):
@@ -535,6 +556,8 @@ class GPUSMART:
                 X,
                 parent_labels=self.modules[k - 1].labels_,
                 max_iter=max_iter,
+                verbose=verbose,
+                verbose_desc=f"Level {k} (rho={self.rho_values[k]})",
             )
 
         return self
