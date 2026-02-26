@@ -34,10 +34,8 @@ ART_REGISTRY = {
     },
     "HypersphereART": {
         "class": HypersphereART,
-        "default_params": {"rho": 0.7, "alpha": 0.01, "beta": 1.0},
+        "default_params": {"rho": 0.7, "alpha": 0.01, "beta": 1.0, "r_hat": 1.0},
         "complement_codes": False,
-        # r_hat must scale with dimensionality: max L2 distance in [0,1]^d = sqrt(d)
-        "dim_dependent": lambda dim: {"r_hat": float(np.sqrt(dim))},
     },
     "BayesianART": {
         "class": BayesianART,
@@ -53,10 +51,9 @@ ART_REGISTRY = {
             "alpha": 1e-7,
             "beta": 1.0,
             "mu": 0.8,
+            "r_hat": 1.0,
         },
         "complement_codes": False,
-        # r_hat must scale with dimensionality: max L2 distance in [0,1]^d = sqrt(d)
-        "dim_dependent": lambda dim: {"r_hat": float(np.sqrt(dim))},
     },
 }
 
