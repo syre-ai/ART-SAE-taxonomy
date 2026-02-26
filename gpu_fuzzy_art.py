@@ -193,15 +193,14 @@ class GPUFuzzyART:
         T = l1_norms / (alpha + self._weight_norms)
         M = l1_norms / self._dim_original
 
-        # Search: iterate by activation descending
-        sorted_indices = torch.argsort(T, descending=True)
-
-        for si in sorted_indices:
-            j = si.item()
-            if M[j].item() >= rho:
-                w_new = beta * x_and_w[j] + (1.0 - beta) * w[j]
-                self._update_category(j, w_new)
-                return j
+        # Vectorized: find highest-T category that passes match criterion
+        valid = M >= rho
+        if valid.any():
+            T_masked = torch.where(valid, T, T.new_tensor(-float("inf")))
+            j = T_masked.argmax().item()
+            w_new = beta * x_and_w[j] + (1.0 - beta) * w[j]
+            self._update_category(j, w_new)
+            return j
 
         # No match — create new category
         c_new = self._num_categories
@@ -377,20 +376,23 @@ class GPUFuzzyART:
         M = l1_norms / self._dim_original
 
         current_rho = rho
-        sorted_indices = torch.argsort(T, descending=True)
+        excluded = torch.zeros(
+            self._num_categories, dtype=torch.bool, device=self._device
+        )
 
-        for si in sorted_indices:
-            j = si.item()
-            m_val = M[j].item()
+        while True:
+            valid = (M >= current_rho) & ~excluded
+            if not valid.any():
+                break
 
-            if m_val < current_rho:
-                # Match criterion failed — skip, no rho change
-                continue
+            T_masked = torch.where(valid, T, T.new_tensor(-float("inf")))
+            j = T_masked.argmax().item()
 
-            # Match criterion passed; check parent constraint
+            # Check parent constraint
             if j in self._cluster_parent and self._cluster_parent[j] != p_label:
                 # Constraint violation — match tracking (MT+)
-                current_rho = m_val + epsilon
+                current_rho = M[j].item() + epsilon
+                excluded[j] = True
                 continue
 
             # Resonance: update weight
