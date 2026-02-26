@@ -351,6 +351,98 @@ class GPUFuzzyART:
         return labels
 
     # ------------------------------------------------------------------
+    # Analysis: bounding boxes, confidence scores
+    # ------------------------------------------------------------------
+
+    def get_bounding_boxes(self) -> tuple:
+        """Extract per-cluster hyperbox bounds from weight vectors.
+
+        In complement-coded FuzzyART, weight w_j encodes the element-wise
+        minimum of all assigned samples. The first half gives lower bounds;
+        1 minus the second half gives upper bounds.
+
+        Returns
+        -------
+        lower : torch.Tensor, shape (n_clusters, dim)
+            Per-dimension lower bounds (normalized [0,1] space).
+        upper : torch.Tensor, shape (n_clusters, dim)
+            Per-dimension upper bounds.
+        width : torch.Tensor, shape (n_clusters, dim)
+            Per-dimension box width (upper - lower). 0=tight, 1=uninformative.
+        """
+        if self._num_categories == 0:
+            raise RuntimeError("Model has not been fitted yet.")
+        w = self._weights  # (K, 2*dim)
+        dim = int(self._dim_original)
+        lower = w[:, :dim]
+        upper = 1.0 - w[:, dim:]
+        width = upper - lower
+        return lower, upper, width
+
+    def predict_with_confidence(self, X: np.ndarray) -> tuple:
+        """Compute match values and activation margins for fit-assigned labels.
+
+        Parameters
+        ----------
+        X : np.ndarray, shape (n_samples, 2*dim)
+            Complement-coded data (same data passed to fit).
+
+        Returns
+        -------
+        labels : np.ndarray, shape (n_samples,)
+            Fit-time cluster labels (copy of self.labels_).
+        match_values : np.ndarray, shape (n_samples,)
+            Match function M for each sample against its assigned cluster.
+        t_margins : np.ndarray, shape (n_samples,)
+            Gap between assigned-cluster T and best-alternative T.
+            Higher = more confident assignment.
+        """
+        if self._num_categories == 0:
+            raise RuntimeError("Model has not been fitted yet.")
+
+        n_samples = X.shape[0]
+        X_t = torch.as_tensor(X, device=self._device, dtype=self._dtype)
+        w = self._weights
+        w_norms = self._weight_norms
+        alpha = self.params["alpha"]
+        dim = self._dim_original
+
+        chunk_size = 4096
+        match_values = np.empty(n_samples, dtype=np.float32)
+        t_margins = np.empty(n_samples, dtype=np.float32)
+
+        for start in range(0, n_samples, chunk_size):
+            end = min(start + chunk_size, n_samples)
+            batch = X_t[start:end]  # (B, dim2)
+            assigned = torch.tensor(
+                self.labels_[start:end], device=self._device, dtype=torch.long
+            )
+
+            x_and_w = torch.minimum(batch.unsqueeze(1), w.unsqueeze(0))  # (B, K, dim2)
+            l1_norms = x_and_w.sum(dim=2)  # (B, K)
+
+            T = l1_norms / (alpha + w_norms.unsqueeze(0))  # (B, K)
+            M = l1_norms / dim  # (B, K)
+
+            batch_range = torch.arange(end - start, device=self._device)
+
+            # Match value for the assigned cluster
+            match_values[start:end] = M[batch_range, assigned].cpu().numpy()
+
+            # T-margin: assigned T minus best alternative T
+            assigned_T = T[batch_range, assigned]
+            if T.shape[1] > 1:
+                T_alt = T.clone()
+                T_alt[batch_range, assigned] = -float("inf")
+                second_T = T_alt.max(dim=1).values
+                margins = assigned_T - second_T
+            else:
+                margins = assigned_T
+            t_margins[start:end] = margins.cpu().numpy()
+
+        return self.labels_.copy(), match_values, t_margins
+
+    # ------------------------------------------------------------------
     # Constrained fit (for GPUSMART hierarchical levels)
     # ------------------------------------------------------------------
 
