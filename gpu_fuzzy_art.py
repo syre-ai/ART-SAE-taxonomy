@@ -385,6 +385,8 @@ class GPUFuzzyART:
     def predict_with_confidence(self, X: np.ndarray) -> tuple:
         """Compute match values and activation margins for fit-assigned labels.
 
+        Runs on CPU to avoid GPU OOM with large cluster counts.
+
         Parameters
         ----------
         X : np.ndarray, shape (n_samples, 2*dim)
@@ -404,26 +406,23 @@ class GPUFuzzyART:
             raise RuntimeError("Model has not been fitted yet.")
 
         n_samples = X.shape[0]
-        X_t = torch.as_tensor(X, device=self._device, dtype=self._dtype)
-        w = self._weights
-        w_norms = self._weight_norms
+        # Force CPU to avoid GPU OOM with many clusters
+        X_t = torch.as_tensor(X, dtype=self._dtype)  # CPU
+        w = self._weights.cpu()
+        w_norms = self._weight_norms.cpu()
         alpha = self.params["alpha"]
         dim = self._dim_original
 
-        # Dynamic chunk size: x_and_w is (B, K, dim2) float32
-        K = w.shape[0]
-        dim2 = w.shape[1]
-        max_bytes = 2 * 1024**3  # 2 GB budget for intermediates
-        chunk_size = max(1, min(4096, max_bytes // (K * dim2 * 4)))
+        K, dim2 = w.shape
+        # Chunk to keep peak memory reasonable (~2 GB)
+        chunk_size = max(1, min(4096, (2 * 1024**3) // (K * dim2 * 4)))
         match_values = np.empty(n_samples, dtype=np.float32)
         t_margins = np.empty(n_samples, dtype=np.float32)
 
         for start in range(0, n_samples, chunk_size):
             end = min(start + chunk_size, n_samples)
             batch = X_t[start:end]  # (B, dim2)
-            assigned = torch.tensor(
-                self.labels_[start:end], device=self._device, dtype=torch.long
-            )
+            assigned = torch.tensor(self.labels_[start:end], dtype=torch.long)
 
             x_and_w = torch.minimum(batch.unsqueeze(1), w.unsqueeze(0))  # (B, K, dim2)
             l1_norms = x_and_w.sum(dim=2)  # (B, K)
@@ -431,12 +430,10 @@ class GPUFuzzyART:
             T = l1_norms / (alpha + w_norms.unsqueeze(0))  # (B, K)
             M = l1_norms / dim  # (B, K)
 
-            batch_range = torch.arange(end - start, device=self._device)
+            batch_range = torch.arange(end - start)
 
-            # Match value for the assigned cluster
-            match_values[start:end] = M[batch_range, assigned].cpu().numpy()
+            match_values[start:end] = M[batch_range, assigned].numpy()
 
-            # T-margin: assigned T minus best alternative T
             assigned_T = T[batch_range, assigned]
             if T.shape[1] > 1:
                 T_alt = T.clone()
@@ -445,7 +442,7 @@ class GPUFuzzyART:
                 margins = assigned_T - second_T
             else:
                 margins = assigned_T
-            t_margins[start:end] = margins.cpu().numpy()
+            t_margins[start:end] = margins.numpy()
 
         return self.labels_.copy(), match_values, t_margins
 
