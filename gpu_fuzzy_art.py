@@ -137,6 +137,16 @@ class GPUFuzzyART:
         self._w = new_w
         self._w_norms = new_norms
 
+        # Grow parent labels buffer if it exists (constrained fit only)
+        if hasattr(self, "_parent_labels") and self._parent_labels is not None:
+            new_pl = torch.full(
+                (new_cap,), -1, dtype=torch.long, device=self._device
+            )
+            n = min(self._num_categories, self._parent_labels.shape[0])
+            if n > 0:
+                new_pl[:n] = self._parent_labels[:n]
+            self._parent_labels = new_pl
+
     @property
     def _weights(self) -> torch.Tensor:
         """View of active weights only."""
@@ -345,7 +355,11 @@ class GPUFuzzyART:
     # ------------------------------------------------------------------
 
     def _step_fit_constrained(self, x: torch.Tensor, p_label: int) -> int:
-        """Fit a single sample with parent-label constraint.
+        """Fit a single sample with parent-label constraint (no match tracking).
+
+        Uses parent constraint as a hard filter: find the best category that
+        passes BOTH vigilance AND parent compatibility. Only creates a new
+        category when zero existing categories satisfy both criteria.
 
         Parameters
         ----------
@@ -361,13 +375,12 @@ class GPUFuzzyART:
         """
         if self._num_categories == 0:
             self._add_category(x.clone())
-            self._cluster_parent[0] = p_label
+            self._parent_labels[0] = p_label
             return 0
 
         rho = self.params["rho"]
         alpha = self.params["alpha"]
         beta = self.params["beta"]
-        epsilon = self._epsilon
 
         w = self._weights
         x_and_w = torch.minimum(x.unsqueeze(0), w)
@@ -375,36 +388,24 @@ class GPUFuzzyART:
         T = l1_norms / (alpha + self._weight_norms)
         M = l1_norms / self._dim_original
 
-        current_rho = rho
-        excluded = torch.zeros(
-            self._num_categories, dtype=torch.bool, device=self._device
-        )
+        # Parent compatibility: unassigned (-1) or same parent
+        pl = self._parent_labels[: self._num_categories]
+        parent_ok = (pl == -1) | (pl == p_label)
 
-        while True:
-            valid = (M >= current_rho) & ~excluded
-            if not valid.any():
-                break
-
+        # Best category passing both vigilance and parent constraint
+        valid = (M >= rho) & parent_ok
+        if valid.any():
             T_masked = torch.where(valid, T, T.new_tensor(-float("inf")))
             j = T_masked.argmax().item()
-
-            # Check parent constraint
-            if j in self._cluster_parent and self._cluster_parent[j] != p_label:
-                # Constraint violation — match tracking (MT+)
-                current_rho = M[j].item() + epsilon
-                excluded[j] = True
-                continue
-
-            # Resonance: update weight
             w_new = beta * x_and_w[j] + (1.0 - beta) * w[j]
             self._update_category(j, w_new)
-            self._cluster_parent[j] = p_label
+            self._parent_labels[j] = p_label
             return j
 
         # No match — create new category
         c_new = self._num_categories
         self._add_category(x.clone())
-        self._cluster_parent[c_new] = p_label
+        self._parent_labels[c_new] = p_label
         return c_new
 
     def _fit_constrained(
@@ -442,7 +443,10 @@ class GPUFuzzyART:
 
         self._init_weights(dim2)
         self.labels_ = np.zeros(n_samples, dtype=int)
-        self._cluster_parent: dict[int, int] = {}
+        # Parent label tensor: -1 = unassigned
+        self._parent_labels = torch.full(
+            (self._w.shape[0],), -1, dtype=torch.long, device=self._device
+        )
 
         for _epoch in range(max_iter):
             iterator = range(n_samples)
