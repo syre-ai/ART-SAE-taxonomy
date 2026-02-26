@@ -332,7 +332,10 @@ class GPUFuzzyART:
         w_norms = self._weight_norms  # (K,)
         alpha = self.params["alpha"]
 
-        chunk_size = 4096
+        # Dynamic chunk size: x_and_w is (B, K, dim2) float32
+        K, dim2 = w.shape
+        max_bytes = 2 * 1024**3  # 2 GB budget for intermediates
+        chunk_size = max(1, min(4096, max_bytes // (K * dim2 * 4)))
         labels = np.empty(n_samples, dtype=int)
 
         for start in range(0, n_samples, chunk_size):
@@ -407,7 +410,11 @@ class GPUFuzzyART:
         alpha = self.params["alpha"]
         dim = self._dim_original
 
-        chunk_size = 4096
+        # Dynamic chunk size: x_and_w is (B, K, dim2) float32
+        K = w.shape[0]
+        dim2 = w.shape[1]
+        max_bytes = 2 * 1024**3  # 2 GB budget for intermediates
+        chunk_size = max(1, min(4096, max_bytes // (K * dim2 * 4)))
         match_values = np.empty(n_samples, dtype=np.float32)
         t_margins = np.empty(n_samples, dtype=np.float32)
 
